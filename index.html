@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Glassmorphism Player v9</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/artplayer/dist/artplayer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="https://w.soundcloud.com/player/api.js"></script>
+    <style>
+        :root {
+            --bg-blur: 15px;
+            --glass-opacity: 0.15;
+        }
+
+        body, html {
+            margin: 0; padding: 0; height: 100%; width: 100%;
+            overflow: hidden; font-family: 'Inter', system-ui, sans-serif;
+            background: #000;
+            touch-action: manipulation;
+        }
+
+        #background-layer {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-size: cover; background-position: center;
+            z-index: -2; transition: background-image 0.8s ease;
+        }
+
+        #blur-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            backdrop-filter: blur(var(--bg-blur));
+            background: rgba(0, 0, 0, 0.4); z-index: -1;
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, var(--glass-opacity));
+            backdrop-filter: blur(25px) saturate(160%);
+            -webkit-backdrop-filter: blur(25px) saturate(160%);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 2rem;
+        }
+
+        .main-container {
+            height: 100vh; width: 100vw; 
+            display: flex; align-items: center; justify-content: center;
+            padding: 20px; box-sizing: border-box;
+        }
+
+        @media (orientation: landscape) {
+            .content-wrapper { flex-direction: row; width: 100%; max-width: 1200px; display: flex; align-items: center; gap: 40px; }
+            .clock-section { flex: 1; text-align: left; }
+            .player-section { flex: 1; display: flex; justify-content: flex-end; }
+            .glass-box { width: 100%; max-width: 480px; }
+            .time-text { font-size: 10vw; line-height: 1; }
+        }
+
+        @media (orientation: portrait) {
+            .content-wrapper { flex-direction: column; text-align: center; gap: 40px; }
+            .player-section { width: 100%; }
+            .glass-box { width: 100%; }
+            .time-text { font-size: 20vw; line-height: 1; }
+        }
+
+        .time-text { font-weight: 900; letter-spacing: -0.05em; text-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+
+        #settings-panel {
+            position: fixed; top: 0; right: 0; height: 100%; width: 320px;
+            background: rgba(10, 10, 10, 0.95); backdrop-filter: blur(40px);
+            z-index: 200; transform: translateX(100%);
+            transition: transform 0.4s ease;
+            padding: 30px; border-left: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        #settings-panel.open { transform: translateX(0); }
+
+        .media-container {
+            width: 100%; aspect-ratio: 16 / 9;
+            background: rgba(0,0,0,0.2); border-radius: 1.2rem;
+            overflow: hidden; display: flex; align-items: center; justify-content: center;
+        }
+        .sc-height { height: 166px; aspect-ratio: auto; }
+        
+        .progress-holder { cursor: pointer; height: 8px; width: 100%; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; }
+        .progress-fill { height: 100%; background: #fff; width: 0%; transition: width 0.1s linear; }
+
+        .hidden-ui { display: none !important; }
+    </style>
+</head>
+<body class="text-white">
+
+    <div id="background-layer"></div>
+    <div id="blur-overlay"></div>
+
+    <main class="main-container">
+        <div class="content-wrapper">
+            <section class="clock-section">
+                <div id="clock" class="time-text">00:00:00</div>
+                <div id="date" class="text-lg md:text-2xl mt-4 opacity-40 font-light tracking-[0.2em] uppercase">Loading...</div>
+            </section>
+
+            <section class="player-section">
+                <div class="glass glass-box p-6 md:p-8 flex flex-col gap-6 shadow-2xl">
+                    <div class="media-container" id="media-parent">
+                        <div id="sc-shell" class="w-full">
+                            <iframe id="sc-player" width="100%" height="166" scrolling="no" frameborder="no" allow="autoplay" src=""></iframe>
+                        </div>
+                        <div id="art-shell" class="hidden w-full h-full">
+                            <div id="artplayer-container" style="width: 100%; height: 100%;"></div>
+                        </div>
+                    </div>
+
+                    <div id="sc-ui" class="flex flex-col gap-5">
+                        <div class="progress-holder" id="progress-click">
+                            <div class="progress-fill" id="progress-bar"></div>
+                        </div>
+                        <div class="flex justify-between items-center text-[10px] opacity-40 font-mono">
+                            <span id="cur-time">00:00</span>
+                            <span id="total-time">00:00</span>
+                        </div>
+                        <div class="flex justify-between items-center px-2">
+                            <i data-lucide="shuffle" class="w-4 h-4 opacity-20"></i>
+                            <div class="flex gap-8 items-center">
+                                <button id="btn-prev" class="hover:scale-110 active:opacity-50 transition-all"><i data-lucide="skip-back" class="w-7 h-7"></i></button>
+                                <button id="btn-play" class="bg-white rounded-full p-4 text-black hover:scale-105 active:scale-95 transition-all shadow-lg">
+                                    <i data-lucide="play" id="icon-play" class="w-7 h-7 fill-current"></i>
+                                </button>
+                                <button id="btn-next" class="hover:scale-110 active:opacity-50 transition-all"><i data-lucide="skip-forward" class="w-7 h-7"></i></button>
+                            </div>
+                            <i data-lucide="repeat" class="w-4 h-4 opacity-20"></i>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <button id="btn-settings" class="fixed bottom-6 right-6 z-[210] glass p-4 rounded-full shadow-xl">
+        <i data-lucide="settings" class="w-6 h-6"></i>
+    </button>
+
+    <aside id="settings-panel">
+        <h2 class="text-2xl font-black mb-8 italic tracking-tighter">DISPLAY SETTINGS</h2>
+        <div class="flex flex-col gap-6">
+            <div class="flex flex-col gap-2">
+                <label class="text-[10px] uppercase opacity-40 font-bold tracking-widest">Wallpaper</label>
+                <input type="text" id="in-bg" class="bg-white/5 border border-white/10 p-3 rounded-xl outline-none text-sm" placeholder="Image URL">
+            </div>
+            <div class="flex flex-col gap-2">
+                <label class="text-[10px] uppercase opacity-40 font-bold tracking-widest">Blur</label>
+                <input type="range" id="in-blur" min="0" max="100" class="w-full">
+            </div>
+            <div class="flex flex-col gap-2">
+                <label class="text-[10px] uppercase opacity-40 font-bold tracking-widest">Engine Mode</label>
+                <select id="in-mode" class="bg-stone-800 p-3 rounded-xl outline-none text-sm cursor-pointer">
+                    <option value="sc">SoundCloud</option>
+                    <option value="art">ArtPlayer (M3U8)</option>
+                </select>
+            </div>
+            <div class="flex flex-col gap-2">
+                <label class="text-[10px] uppercase opacity-40 font-bold tracking-widest">Media Source</label>
+                <input type="text" id="in-media" class="bg-white/5 border border-white/10 p-3 rounded-xl outline-none text-sm" placeholder="Paste link here...">
+                <button id="btn-apply" class="bg-white text-black font-bold py-4 rounded-xl mt-4 hover:bg-gray-200 transition-all text-xs tracking-widest">SAVE & SYNC</button>
+            </div>
+        </div>
+    </aside>
+
+    <script>
+        lucide.createIcons();
+
+        const store = {
+            bg: localStorage.getItem('v9_bg') || 'https://images.unsplash.com/photo-1470770841072-f978cf4d019e?q=80&w=2070',
+            blur: localStorage.getItem('v9_blur') || '15',
+            mode: localStorage.getItem('v9_mode') || 'sc',
+            media: localStorage.getItem('v9_media') || 'https://soundcloud.com/unapersona-519011028/sets/forsken-ost'
+        };
+
+        let artInstance = null;
+        let scWidget = null;
+        let scDuration = 0;
+        let syncTimer = null;
+
+        function updateClock() {
+            const d = new Date();
+            document.getElementById('clock').textContent = d.toLocaleTimeString('zh-TW', { hour12: false });
+            document.getElementById('date').textContent = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+        }
+
+        function formatTime(ms) {
+            if (!ms || isNaN(ms)) return "00:00";
+            const s = Math.floor(ms / 1000);
+            return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+        }
+
+        function togglePlayIcon(isPlaying) {
+            const btn = document.getElementById('icon-play');
+            if (!btn) return;
+            const currentIcon = btn.getAttribute('data-lucide');
+            const targetIcon = isPlaying ? 'pause' : 'play';
+            
+            if (currentIcon !== targetIcon) {
+                btn.setAttribute('data-lucide', targetIcon);
+                lucide.createIcons();
+            }
+        }
+
+        // 強效同步：每 500ms 檢查一次播放器真實狀態
+        function startSyncTimer() {
+            if (syncTimer) clearInterval(syncTimer);
+            syncTimer = setInterval(() => {
+                if (scWidget && store.mode === 'sc') {
+                    scWidget.isPaused((paused) => {
+                        togglePlayIcon(!paused);
+                    });
+                }
+            }, 500);
+        }
+
+        function initSC() {
+            const frame = document.getElementById('sc-player');
+            const cleanUrl = store.media.replace('m.soundcloud.com', 'soundcloud.com').split('?in=')[0];
+            
+            // 強制重新載入
+            frame.src = ""; 
+            setTimeout(() => {
+                frame.src = `https://w.soundcloud.com/player/?url=${encodeURIComponent(cleanUrl)}&color=%23ffffff&auto_play=false&hide_related=true&show_comments=false&show_user=true&show_reposts=false&show_teaser=false&visual=false`;
+                scWidget = SC.Widget(frame);
+
+                scWidget.bind(SC.Widget.Events.READY, () => {
+                    scWidget.getDuration(d => {
+                        scDuration = d;
+                        document.getElementById('total-time').textContent = formatTime(d);
+                    });
+                    startSyncTimer(); // 開始強效同步
+                });
+
+                scWidget.bind(SC.Widget.Events.PLAY_PROGRESS, (ev) => {
+                    if (scDuration) {
+                        const p = (ev.currentPosition / scDuration) * 100;
+                        document.getElementById('progress-bar').style.width = p + '%';
+                        document.getElementById('cur-time').textContent = formatTime(ev.currentPosition);
+                    }
+                });
+            }, 50);
+        }
+
+        function initAP() {
+            if (artInstance) artInstance.destroy();
+            artInstance = new Artplayer({
+                container: '#artplayer-container',
+                url: store.media,
+                type: 'm3u8',
+                customType: {
+                    m3u8: (video, url) => {
+                        if (Hls.isSupported()) {
+                            const hls = new Hls();
+                            hls.loadSource(url);
+                            hls.attachMedia(video);
+                        } else {
+                            video.src = url;
+                        }
+                    }
+                },
+                autoplay: true, theme: '#fff'
+            });
+        }
+
+        function refresh() {
+            document.getElementById('background-layer').style.backgroundImage = `url('${store.bg}')`;
+            document.documentElement.style.setProperty('--bg-blur', `${store.blur}px`);
+            
+            const isSC = store.mode === 'sc';
+            document.getElementById('sc-shell').classList.toggle('hidden', !isSC);
+            document.getElementById('art-shell').classList.toggle('hidden', isSC);
+            document.getElementById('sc-ui').classList.toggle('hidden-ui', !isSC);
+            document.getElementById('media-parent').classList.toggle('sc-height', isSC);
+
+            if (isSC) {
+                if(artInstance) { artInstance.destroy(); artInstance = null; }
+                initSC();
+                togglePlayIcon(false);
+            } else {
+                if (syncTimer) clearInterval(syncTimer);
+                document.getElementById('sc-player').src = "";
+                scWidget = null;
+                initAP();
+            }
+
+            localStorage.setItem('v9_bg', store.bg);
+            localStorage.setItem('v9_blur', store.blur);
+            localStorage.setItem('v9_mode', store.mode);
+            localStorage.setItem('v9_media', store.media);
+        }
+
+        document.getElementById('btn-play').onclick = () => {
+            if (scWidget) {
+                scWidget.toggle();
+                // 立即檢查一次
+                scWidget.isPaused((paused) => togglePlayIcon(paused));
+            }
+        };
+        
+        document.getElementById('btn-next').onclick = () => {
+            if (scWidget) {
+                document.getElementById('progress-bar').style.width = '0%';
+                scWidget.next();
+            }
+        };
+        
+        document.getElementById('btn-prev').onclick = () => {
+            if (scWidget) {
+                document.getElementById('progress-bar').style.width = '0%';
+                scWidget.prev();
+            }
+        };
+
+        document.getElementById('progress-click').onclick = (e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const pct = (e.clientX - rect.left) / rect.width;
+            if(scWidget && scDuration) scWidget.seekTo(scDuration * pct);
+        };
+
+        document.getElementById('btn-settings').onclick = () => document.getElementById('settings-panel').classList.toggle('open');
+        
+        document.getElementById('btn-apply').onclick = () => {
+            store.bg = document.getElementById('in-bg').value;
+            store.blur = document.getElementById('in-blur').value;
+            store.mode = document.getElementById('in-mode').value;
+            store.media = document.getElementById('in-media').value;
+            refresh();
+            document.getElementById('settings-panel').classList.remove('open');
+        };
+
+        window.onload = () => {
+            document.getElementById('in-bg').value = store.bg;
+            document.getElementById('in-blur').value = store.blur;
+            document.getElementById('in-mode').value = store.mode;
+            document.getElementById('in-media').value = store.media;
+            updateClock();
+            setInterval(updateClock, 1000);
+            refresh();
+        };
+
+        document.addEventListener('mousedown', (e) => {
+            const p = document.getElementById('settings-panel');
+            if(!p.contains(e.target) && !document.getElementById('btn-settings').contains(e.target)) p.classList.remove('open');
+        });
+    </script>
+</body>
+</html>
+
